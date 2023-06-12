@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric/global"
-	"go.opentelemetry.io/otel/metric/instrument"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -16,11 +16,11 @@ const (
 )
 
 type middleware struct {
-	requestsCompleted instrument.Int64Counter
-	requestsDuration  instrument.Float64Histogram
+	requestsCompleted metric.Int64Counter
+	requestsDuration  metric.Float64Histogram
 
-	resolversCompleted instrument.Int64Counter
-	resolverDuration   instrument.Float64Histogram
+	resolversCompleted metric.Int64Counter
+	resolverDuration   metric.Float64Histogram
 
 	customResolverOnly bool
 }
@@ -39,7 +39,7 @@ func Middleware(options ...Option) middleware { //nolint:revive
 		instrumentResolverCount:      true,
 		instrumentResolverCustomOnly: false,
 		instrumentationName:          DefaultInstrumentationName,
-		meterProvider:                global.MeterProvider(),
+		meterProvider:                otel.GetMeterProvider(),
 	}
 
 	for _, o := range options {
@@ -55,28 +55,28 @@ func Middleware(options ...Option) middleware { //nolint:revive
 	}
 
 	if c.instrumentRequestDuration {
-		m.requestsDuration, err = meter.Float64Histogram("gql.request.duration", instrument.WithUnit("ms"), instrument.WithDescription("The time taken for server to process the request."))
+		m.requestsDuration, err = meter.Float64Histogram("gql.request.duration", metric.WithUnit("ms"), metric.WithDescription("The time taken for server to process the request."))
 		if err != nil {
 			panic(err)
 		}
 	}
 
 	if c.instrumentRequestCount {
-		m.requestsCompleted, err = meter.Int64Counter("gql.request.completed", instrument.WithUnit("1"), instrument.WithDescription("Total number of requests completed."))
+		m.requestsCompleted, err = meter.Int64Counter("gql.request.completed", metric.WithUnit("1"), metric.WithDescription("Total number of requests completed."))
 		if err != nil {
 			panic(err)
 		}
 	}
 
 	if c.instrumentResolverDuration {
-		m.resolverDuration, err = meter.Float64Histogram("gql.resolver.duration", instrument.WithUnit("ms"), instrument.WithDescription("The time taken for server to resolve a resolver."))
+		m.resolverDuration, err = meter.Float64Histogram("gql.resolver.duration", metric.WithUnit("ms"), metric.WithDescription("The time taken for server to resolve a resolver."))
 		if err != nil {
 			panic(err)
 		}
 	}
 
 	if c.instrumentResolverCount {
-		m.resolversCompleted, err = meter.Int64Counter("gql.resolver.completed", instrument.WithUnit("1"), instrument.WithDescription("Total number of resolvers completed."))
+		m.resolversCompleted, err = meter.Int64Counter("gql.resolver.completed", metric.WithUnit("1"), metric.WithDescription("Total number of resolvers completed."))
 		if err != nil {
 			panic(err)
 		}
@@ -104,14 +104,16 @@ func (m middleware) InterceptResponse(ctx context.Context, next graphql.Response
 
 	if m.requestsDuration != nil {
 		m.requestsDuration.Record(ctx, float64(time.Since(oc.Stats.OperationStart).Milliseconds()),
-			attribute.Key("gql.request.name").String(opName),
+			metric.WithAttributeSet(attribute.NewSet(attribute.Key("gql.request.name").String(opName))),
 		)
 	}
 
 	if m.requestsCompleted != nil {
 		m.requestsCompleted.Add(ctx, 1,
-			attribute.Key("gql.request.name").String(opName),
-			attribute.Key("gql.request.error").Bool(len(errs) != 0),
+			metric.WithAttributeSet(attribute.NewSet(
+				attribute.Key("gql.request.name").String(opName),
+				attribute.Key("gql.request.error").Bool(len(errs) != 0),
+			)),
 		)
 	}
 
@@ -126,16 +128,20 @@ func (m middleware) InterceptField(ctx context.Context, next graphql.Resolver) (
 
 	if m.resolverDuration != nil && (!m.customResolverOnly || fc.IsResolver) {
 		m.resolverDuration.Record(ctx, float64(time.Since(begin).Milliseconds()),
-			attribute.Key("gql.resolver.object").String(fc.Object),
-			attribute.Key("gql.resolver.field").String(fc.Field.Name),
+			metric.WithAttributeSet(attribute.NewSet(
+				attribute.Key("gql.resolver.object").String(fc.Object),
+				attribute.Key("gql.resolver.field").String(fc.Field.Name),
+			)),
 		)
 	}
 
 	if m.resolversCompleted != nil && (!m.customResolverOnly || fc.IsResolver) {
 		m.resolversCompleted.Add(ctx, 1,
-			attribute.Key("gql.resolver.object").String(fc.Object),
-			attribute.Key("gql.resolver.field").String(fc.Field.Name),
-			attribute.Key("gql.resolver.error").Bool(err != nil),
+			metric.WithAttributeSet(attribute.NewSet(
+				attribute.Key("gql.resolver.object").String(fc.Object),
+				attribute.Key("gql.resolver.field").String(fc.Field.Name),
+				attribute.Key("gql.resolver.error").Bool(err != nil),
+			)),
 		)
 	}
 
